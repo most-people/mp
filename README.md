@@ -20,6 +20,7 @@ Project documents:
 - [Protocol v1](docs/protocol-v1.md)
 - [First-round acceptance](docs/acceptance.md)
 - [First-round implementation report](docs/first-round-report.md)
+- [Peeroxide isolation test](docs/peeroxide-repro.md)
 
 ## Development
 
@@ -30,7 +31,7 @@ cargo test --workspace --locked
 
 cargo run --bin mp -- doctor
 cargo run --bin mp -- publish ./example.bin
-cargo run --bin mp -- get 'mp://<cid>?filename=example.bin'
+cargo run --bin mp -- get 'mp://<cid>?filename=example.bin' --discovery-timeout 90
 cargo run --bin mp -- node
 cargo run --bin mp -- holdings
 ```
@@ -44,10 +45,11 @@ Peeroxide blind-relay mode is available for diagnostics:
 mp --force-relay '<32-byte-hex-public-key>@<ip>:<port>' node
 ```
 
-The first-round implementation is present, but cross-device transfer is not
-yet accepted because Peeroxide 1.7.3 establishes discovery/handshake state and
-then fails to carry application data on the tested paths. See the report for
-the exact evidence; do not treat this repository as a working release yet.
+Peeroxide 1.7.3 passed 30 independent cross-device `ping` / `pong` connections.
+The 100 MiB sample passed in both directions with matching CID and SHA-256,
+including publisher-exit propagation through a restarted downloader seed. The
+first-round MVP is accepted on the tested devices; see the report for exact
+evidence and remaining pre-release work.
 
 The repository is experimental. Protocol and storage compatibility with
 MostBox, Hyperdrive, BitTorrent, and IPFS UnixFS is not a goal for v1.

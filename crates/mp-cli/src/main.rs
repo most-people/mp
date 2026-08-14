@@ -40,9 +40,9 @@ enum Command {
         /// Canonical mp:// share link.
         link: String,
 
-        /// Discovery and transfer deadline in seconds.
+        /// Maximum time to discover and connect to a seed, in seconds.
         #[arg(long, default_value_t = 90)]
-        timeout: u64,
+        discovery_timeout: u64,
     },
 
     /// Start the node and seed every valid persisted holding.
@@ -77,7 +77,10 @@ async fn run(cli: Cli) -> Result<()> {
 
     match cli.command {
         Command::Publish { file } => publish(&data_dir, &file, node_options).await,
-        Command::Get { link, timeout } => get(&data_dir, &link, timeout, node_options).await,
+        Command::Get {
+            link,
+            discovery_timeout,
+        } => get(&data_dir, &link, discovery_timeout, node_options).await,
         Command::Node => run_node(&data_dir, node_options).await,
         Command::Holdings => list_holdings(&data_dir),
         Command::Doctor { timeout } => doctor(&data_dir, timeout, node_options).await,
@@ -108,7 +111,7 @@ async fn publish(data_dir: &Path, file: &Path, options: NodeOptions) -> Result<(
 async fn get(
     data_dir: &Path,
     raw_link: &str,
-    timeout_seconds: u64,
+    discovery_timeout_seconds: u64,
     options: NodeOptions,
 ) -> Result<()> {
     let link: ShareLink = raw_link.parse()?;
@@ -119,7 +122,7 @@ async fn get(
     println!("LOOKUP {}", link.cid());
 
     let downloaded = node
-        .download(&link, Duration::from_secs(timeout_seconds))
+        .download(&link, Duration::from_secs(discovery_timeout_seconds))
         .await?;
     println!("CID {}", downloaded.holding.cid);
     println!("SIZE {}", downloaded.holding.size);

@@ -31,10 +31,14 @@ Devices:
 Run both directions with a generated 100 MiB file:
 
 1. Start a publisher and wait until its CID topic is announced.
-2. Start a downloader with only the printed `mp://` link.
+2. Start a downloader with only the printed `mp://` link and a discovery
+   deadline, for example `--discovery-timeout 90`.
 3. Require direct or explicitly reported relayed connectivity.
 4. Require identical file length and CID.
 5. Confirm the downloader reports the holding and remains a seed.
+
+The discovery deadline must not limit total transfer duration. Once connected,
+each successful frame resets a 120-second inactivity timeout.
 
 ## Three-node propagation acceptance
 

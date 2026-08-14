@@ -37,12 +37,15 @@ Exit criteria:
 
 ## Phase 1: Rust workspace and node foundation
 
-Start with two crates only:
+Keep the product implementation in two crates:
 
 ```text
 crates/mp-core  protocol, storage, node lifecycle, Peeroxide integration
 crates/mp-cli   daemon and acceptance-test interface
 ```
+
+The workspace also contains `peeroxide-repro`, an isolated diagnostic binary
+with no dependency on `mp-core`.
 
 Exit criteria:
 

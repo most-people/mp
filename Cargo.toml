@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/mp-core", "crates/mp-cli"]
+members = ["crates/mp-core", "crates/mp-cli", "crates/peeroxide-repro"]
 
 [workspace.package]
 version = "0.1.0"

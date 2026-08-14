@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use cid::Cid;
@@ -22,6 +23,49 @@ pub trait MessageConnection: Send {
 
     /// Gracefully close the write side.
     async fn shutdown(&mut self) -> Result<()>;
+}
+
+/// Reset an inactivity deadline after every successful peer read or write.
+pub(crate) struct IdleTimeoutConnection<C> {
+    inner: C,
+    timeout: Duration,
+}
+
+impl<C> IdleTimeoutConnection<C> {
+    pub(crate) fn new(inner: C, timeout: Duration) -> Self {
+        Self { inner, timeout }
+    }
+
+    fn timeout_error(&self, operation: &str) -> MpError {
+        MpError::Timeout(format!(
+            "peer {operation} made no progress for {:?}",
+            self.timeout
+        ))
+    }
+}
+
+#[async_trait]
+impl<C> MessageConnection for IdleTimeoutConnection<C>
+where
+    C: MessageConnection,
+{
+    async fn read_message(&mut self) -> Result<Option<Vec<u8>>> {
+        tokio::time::timeout(self.timeout, self.inner.read_message())
+            .await
+            .map_err(|_| self.timeout_error("read"))?
+    }
+
+    async fn write_message(&mut self, message: &[u8]) -> Result<()> {
+        tokio::time::timeout(self.timeout, self.inner.write_message(message))
+            .await
+            .map_err(|_| self.timeout_error("write"))?
+    }
+
+    async fn shutdown(&mut self) -> Result<()> {
+        tokio::time::timeout(self.timeout, self.inner.shutdown())
+            .await
+            .map_err(|_| self.timeout_error("shutdown"))?
+    }
 }
 
 #[async_trait]
@@ -110,6 +154,7 @@ where
     };
 
     let cid = request.to_string();
+    tracing::debug!(%cid, size = holding.size, "file request accepted");
     write_control(
         &mut connection,
         &Control::offer(&cid, &holding.filename, holding.size),
@@ -137,6 +182,7 @@ where
     }
 
     write_control(&mut connection, &Control::complete(cid, sent)).await?;
+    tracing::debug!(bytes = sent, "file response sent");
     connection.shutdown().await
 }
 
@@ -177,6 +223,7 @@ where
             ));
         }
     };
+    tracing::debug!(cid = %expected_cid, size = expected_size, "file offer accepted");
 
     let temp_path = store.temporary_object_path();
     let mut temp_guard = TempDownloadGuard::new(temp_path.clone());
@@ -235,6 +282,7 @@ where
     .await
     .map_err(|error| MpError::Network(format!("commit task failed: {error}")))??;
     temp_guard.disarm();
+    tracing::debug!(cid = %expected_cid, bytes = received, "file download verified");
 
     Ok(ReceivedFile {
         object_path: store.object_path(expected_cid),
@@ -315,6 +363,23 @@ mod tests {
         rx: mpsc::Receiver<Vec<u8>>,
     }
 
+    struct StalledConnection;
+
+    #[async_trait]
+    impl MessageConnection for StalledConnection {
+        async fn read_message(&mut self) -> Result<Option<Vec<u8>>> {
+            std::future::pending().await
+        }
+
+        async fn write_message(&mut self, _message: &[u8]) -> Result<()> {
+            std::future::pending().await
+        }
+
+        async fn shutdown(&mut self) -> Result<()> {
+            std::future::pending().await
+        }
+    }
+
     fn memory_pair() -> (MemoryConnection, MemoryConnection) {
         let (left_tx, right_rx) = mpsc::channel(16);
         let (right_tx, left_rx) = mpsc::channel(16);
@@ -346,6 +411,15 @@ mod tests {
         async fn shutdown(&mut self) -> Result<()> {
             Ok(())
         }
+    }
+
+    #[tokio::test]
+    async fn idle_timeout_reports_the_stalled_operation() {
+        let mut connection =
+            IdleTimeoutConnection::new(StalledConnection, Duration::from_millis(5));
+
+        let error = connection.read_message().await.unwrap_err();
+        assert!(matches!(error, MpError::Timeout(message) if message.contains("peer read")));
     }
 
     #[tokio::test]

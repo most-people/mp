@@ -9,10 +9,13 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::{Instant, timeout_at};
 
+use crate::transfer::IdleTimeoutConnection;
 use crate::{
     HoldingValidation, MpError, NodeIdentity, ObjectStore, Result, ShareLink, parse_file_cid,
     receive_file, serve_file, topic_from_cid,
 };
+
+const TRANSFER_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
 
 type PendingDownloads = Arc<Mutex<HashMap<[u8; 32], mpsc::Sender<SwarmConnection>>>>;
 
@@ -151,8 +154,13 @@ impl Node {
         Ok(cids)
     }
 
-    /// Download a share link before its deadline, verify it, and become a seed.
-    pub async fn download(&self, link: &ShareLink, timeout: Duration) -> Result<DownloadResult> {
+    /// Discover a peer before the deadline, download with an inactivity timeout,
+    /// verify the object, and become a seed.
+    pub async fn download(
+        &self,
+        link: &ShareLink,
+        discovery_timeout: Duration,
+    ) -> Result<DownloadResult> {
         let store_for_lookup = self.store.clone();
         let cid_for_lookup = *link.cid();
         let local_holding =
@@ -186,7 +194,7 @@ impl Node {
         }
 
         let result = self
-            .download_inner(link.cid(), topic, timeout, &mut connection_rx)
+            .download_inner(link.cid(), topic, discovery_timeout, &mut connection_rx)
             .await;
         self.pending
             .lock()
@@ -202,16 +210,18 @@ impl Node {
         &self,
         cid: &Cid,
         topic: [u8; 32],
-        timeout: Duration,
+        discovery_timeout: Duration,
         connection_rx: &mut mpsc::Receiver<SwarmConnection>,
     ) -> Result<DownloadResult> {
-        join_client(&self.handle, topic).await?;
-        self.handle
-            .flush()
+        let deadline = Instant::now() + discovery_timeout;
+        timeout_at(deadline, join_client(&self.handle, topic))
             .await
+            .map_err(|_| download_timeout(cid, None))??;
+        timeout_at(deadline, self.handle.flush())
+            .await
+            .map_err(|_| download_timeout(cid, None))?
             .map_err(|error| MpError::Network(error.to_string()))?;
 
-        let deadline = Instant::now() + timeout;
         let mut last_error = None;
         loop {
             let connection = timeout_at(deadline, connection_rx.recv())
@@ -219,8 +229,9 @@ impl Node {
                 .map_err(|_| download_timeout(cid, last_error.as_ref()))?
                 .ok_or_else(|| MpError::Network("connection router stopped".to_string()))?;
             let remote_public_key = hex::encode(connection.remote_public_key());
-            match timeout_at(deadline, receive_file(self.store.clone(), cid, connection)).await {
-                Ok(Ok(received)) => {
+            let connection = IdleTimeoutConnection::new(connection, TRANSFER_IDLE_TIMEOUT);
+            match receive_file(self.store.clone(), cid, connection).await {
+                Ok(received) => {
                     self.handle
                         .leave(topic)
                         .await
@@ -242,11 +253,10 @@ impl Node {
                         remote_public_key,
                     });
                 }
-                Ok(Err(error)) => {
+                Err(error) => {
                     tracing::warn!(peer = %remote_public_key, %error, "file transfer failed");
                     last_error = Some(error.to_string());
                 }
-                Err(_) => return Err(download_timeout(cid, last_error.as_ref())),
             }
         }
     }
@@ -292,6 +302,7 @@ async fn connection_loop(
         let store = store.clone();
         let peer = hex::encode(connection.remote_public_key());
         tokio::spawn(async move {
+            let connection = IdleTimeoutConnection::new(connection, TRANSFER_IDLE_TIMEOUT);
             if let Err(error) = serve_file(store, connection).await {
                 tracing::warn!(%peer, %error, "file request failed");
             }

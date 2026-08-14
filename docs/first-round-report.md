@@ -1,6 +1,6 @@
 # First-round implementation report
 
-Date: 2026-08-14
+Updated: 2026-08-15
 
 ## Outcome
 
@@ -15,13 +15,16 @@ Phases 0 through 3 are implemented at source level:
 - `publish`, `get`, `node`, `holdings`, and `doctor` CLI commands.
 - Optional explicit Peeroxide blind-relay configuration.
 
-The first-round network exit criteria are **not met**. Public HyperDHT
-bootstrap and topic discovery work, but Peeroxide 1.7.3 did not deliver
-application data after connection establishment on the tested devices.
+The first-round MVP exit criteria are met on the tested devices. The 100 MiB
+sample passed in both directions, a restarted downloader propagated it after
+the original publisher exited, and interrupted/corrupt objects never became
+seeds. The earlier Peeroxide blocker diagnosis was incorrect: a 90-second
+application deadline cancelled a healthy transfer that required almost six
+minutes on the tested path.
 
-## Verified checks
+## Automated checks
 
-The repository checks passed:
+The repository checks pass:
 
 ```bash
 cargo fmt --all -- --check
@@ -29,9 +32,10 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
 ```
 
-Covered behavior includes CID and frame golden values, strict parsing,
-identity restart, duplicate import, missing/corrupt objects, corrupt metadata,
-successful in-process multi-frame transfer, and size/CID failure cleanup.
+The 25 tests cover CID and frame golden values, strict parsing, identity
+restart, duplicate import, missing/corrupt objects, corrupt metadata,
+successful in-process multi-frame transfer, size/CID failure cleanup, the
+Peeroxide reproduction CLI, and stalled-peer timeout behavior.
 
 `mp doctor` reached the public HyperDHT on all three devices:
 
@@ -44,19 +48,41 @@ The initial zero-holding doctor run exposed and fixed a lifecycle bug: calling
 1.7.3. `mp` now flushes startup joins only when at least one valid holding was
 announced.
 
-Release measurements:
+The accepted x86-64 Linux musl build is a stripped, static PIE:
 
-| Build | Size | SHA-256 |
-| --- | ---: | --- |
-| x86_64 Linux musl static PIE | 2,771,664 bytes | `39eb4f404ecb77ef79260e1f49996a8aa51aaf8d697156fe6d0709629c8f7cf5` |
-| x86_64 Linux glibc 2.36 PIE | 2,659,064 bytes | `5c0a2e5b76e39a41e567e10df23e0cfc7ea006c01f07bbf577502a1f1aa92f22` |
+```text
+size    2603752
+sha256  156ed3c144cad6cfb72ef2ef3b3c2e8d67d73a7bcde065ffc40cf38db0c60914
+```
 
-Both are comfortably below the 10 MB core target. Size alone does not satisfy
-the performance gate.
+It remains comfortably below the 10 MB core target. This exact artifact also
+passed a final public-to-NAT 1 KiB discovery, transfer, CID verification, and
+automatic-seeding smoke test with the default discovery deadline.
 
-## 100 MiB reproduction
+## Peeroxide isolation
 
-Publisher A generated this source on `x.most.red`:
+The independent `peeroxide-repro` crate uses only Peeroxide discovery,
+connection establishment, and a four-byte `ping` / `pong` exchange. The server
+ran on `x.most.red`; the client ran behind NAT on `192.168.31.52` and created a
+fresh swarm identity for every round.
+
+```text
+server expected=30 accepted=30 passed=30 failed=0 deadline_elapsed=false
+client expected=30 passed=30 failed=0
+```
+
+The static binary was 2,118,432 bytes with SHA-256
+`45c54e91a09d0c3d7107777ec6923595fb9d8399d7aae4f50bd3c407d576b829`.
+This rules out a general Peeroxide 1.7.3 first-frame failure on the tested
+network path.
+
+## File-transfer diagnosis
+
+The same two devices then passed complete `mp-file/1` transfers for 1 KiB and
+64 KiB files. Debug logs confirmed the exact message sequence, including a
+65,537-byte tagged data message for the 64 KiB file.
+
+The original 100 MiB sample was:
 
 ```text
 size    104857600
@@ -65,47 +91,63 @@ cid     bafkreihbvz4dnyjmykzp26keichivudadyfhweea3ttcadvdp4nmpbdg6q
 peer    e562fcfbbd8d0e1094a753b21d2b9b8bb3ee7f5eb2e15a92cd9a50328f993ea5
 ```
 
-An independent Peeroxide CLI lookup found exactly that peer on the raw
-SHA-256 digest topic. NATed downloader B also logged the peer discovery and a
-successful punch:
+An initial diagnostic rerun with a 600-second deadline transferred all 1,600
+data frames from the public publisher to the NATed downloader in approximately
+5 minutes 56 seconds. The downloaded CID and SHA-256 matched the source
+exactly.
 
-```text
-discovered peer pk=e562fcfb
-NAT settled + verified remote
-holepuncher(initiator): probe received
-punch successful
-peer connected pk=e562fcfb
-```
+The earlier run used one 90-second absolute deadline for discovery plus the
+entire transfer. `timeout_at` cancelled `receive_file` while the publisher was
+still sending valid data. Once the receiving connection disappeared, the
+publisher eventually logged `RTO timeout exceeded`. The generic log label
+`file request failed` covered the whole server transfer and did not prove that
+the request was missing; the successful rerun shows the request was a valid
+110-byte frame.
 
-No `mp-file/1` request arrived intact. A eventually reported:
+The fix separates the timeout semantics:
 
-```text
-file request failed ... RTO timeout exceeded
-```
+- `--discovery-timeout` limits finding and connecting to a seed.
+- Total transfer duration is not capped after connection establishment.
+- A connection is abandoned only after 120 seconds without a successful peer
+  read or write.
 
-The same failure boundary was reproduced with:
+The fixed release build then repeated public-to-NAT with the default 90-second
+discovery deadline. Transfer continued beyond 90 seconds and completed in
+approximately 5 minutes 43 seconds with the same CID and SHA-256.
 
-- musl static builds on A and B;
-- glibc 2.36 builds on A and B (`handshake failed: empty reply` on one run);
-- a second identity on the public host;
-- macOS publisher to the same-LAN Debian device;
-- a dedicated Peeroxide blind relay, which received no sessions before the
-  client deadline.
+## Propagation and restart
 
-This isolates the current blocker below `mp-file/1`, in Peeroxide's
-handshake/UDX connection path. The in-process message transport proves the
-application state machine, but it is not a substitute for device acceptance.
+The original public publisher A was stopped and its process confirmed absent.
+The NATed downloader B was restarted with `mp node`; it revalidated the object,
+restored the same persistent identity, joined one CID topic, and reported
+`READY 1 topics`.
 
-## Remaining acceptance work
+A fresh identity and empty store C on the public host then downloaded the full
+100 MiB object only from B. B logged an accepted request and a complete
+104,857,600-byte response. C reported B's public key as `SOURCE_PEER`, produced
+the expected CID and SHA-256, and automatically announced the topic as a new
+seed. The NAT-to-public transfer took approximately 5 minutes 45 seconds.
 
-1. Reduce the failure to Peeroxide's own minimal write/read example and report
-   it upstream with the two-device logs.
-2. Pin a Peeroxide commit or release that carries bytes reliably on these
-   devices.
-3. Repeat 100 MiB in both directions.
-4. Complete A publishes, B downloads, A exits, C downloads from B.
-5. Restart B with `mp node` and repeat C discovery and CID verification.
-6. Run interrupted-transfer and corrupt-object restart checks over the real
-   network path.
+## Failure paths
 
-Until those checks pass, phases 2 and 3 remain implemented but not accepted.
+- A cloned holding was modified by one byte. `holdings` reported
+  `valid=0 invalid=1`, and node restart reported `READY 0 topics`.
+- A sender was stopped after the receiver wrote 16,252,928 temporary bytes.
+  The receiver failed after the 120-second idle timeout with no final object,
+  no temporary object, and `valid=0 invalid=0`.
+- Oversized frames and unknown protocol versions remain covered by the
+  protocol tests and fail closed before content is accepted.
+
+## Acceptance status
+
+- Automated formatting, lint, and tests pass.
+- Public-to-NAT and NAT-to-public 100 MiB transfers pass.
+- Publisher-exit propagation and downloader restart pass.
+- CID and SHA-256 verification pass at every completed hop.
+- Interrupted and corrupt content never becomes a holding or announced topic.
+- No system-wide service, open inbound port, or router configuration was
+  required.
+
+Phases 0 through 3 are accepted for this experimental first-round scope. The
+next implementation phase is live channel messaging; broader performance,
+soak, abuse, and mobile lifecycle testing remain pre-release work.
