@@ -5,7 +5,11 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow};
 use clap::{Parser, Subcommand};
 use directories::ProjectDirs;
-use mp_core::{Node, NodeOptions, ObjectStore, RelayConfig, ShareLink, parse_file_cid};
+use mp_core::{
+    ChannelInvite, ChannelNode, ChannelStore, Node, NodeOptions, ObjectStore, RelayConfig,
+    ShareLink, parse_file_cid,
+};
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Debug, Parser)]
@@ -57,6 +61,42 @@ enum Command {
         #[arg(long, default_value_t = 30)]
         timeout: u64,
     },
+
+    /// Create, join, or open a live capability channel.
+    Channel {
+        #[command(subcommand)]
+        command: ChannelCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum ChannelCommand {
+    /// Create and persist a channel capability without going online.
+    Create {
+        /// Advisory channel display name.
+        name: String,
+    },
+
+    /// Persist an invite and enter its live interactive session.
+    Join {
+        /// Canonical mp-channel:// capability invite.
+        invite: String,
+    },
+
+    /// Reopen a locally persisted channel by id.
+    Open {
+        /// Stable hexadecimal channel id.
+        channel_id: String,
+    },
+
+    /// Explicitly print the capability invite for a local channel.
+    Invite {
+        /// Stable hexadecimal channel id.
+        channel_id: String,
+    },
+
+    /// List locally persisted channels without revealing capabilities.
+    List,
 }
 
 #[tokio::main]
@@ -84,6 +124,7 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Node => run_node(&data_dir, node_options).await,
         Command::Holdings => list_holdings(&data_dir),
         Command::Doctor { timeout } => doctor(&data_dir, timeout, node_options).await,
+        Command::Channel { command } => channel(&data_dir, command, node_options).await,
     }
 }
 
@@ -189,6 +230,114 @@ async fn doctor(data_dir: &Path, timeout_seconds: u64, options: NodeOptions) -> 
     Ok(())
 }
 
+async fn channel(data_dir: &Path, command: ChannelCommand, options: NodeOptions) -> Result<()> {
+    let store = ChannelStore::open(data_dir)
+        .with_context(|| format!("failed to open data directory {}", data_dir.display()))?;
+    match command {
+        ChannelCommand::Create { name } => {
+            let invite = store.create(name)?;
+            print_channel_invite(&invite)?;
+            Ok(())
+        }
+        ChannelCommand::Join { invite } => {
+            let invite: ChannelInvite = invite.parse()?;
+            let invite = store.add(&invite)?;
+            run_channel_session(store, invite, options).await
+        }
+        ChannelCommand::Open { channel_id } => {
+            let invite = store.invite(&channel_id)?;
+            run_channel_session(store, invite, options).await
+        }
+        ChannelCommand::Invite { channel_id } => {
+            print_channel_invite(&store.invite(&channel_id)?)?;
+            Ok(())
+        }
+        ChannelCommand::List => {
+            for channel in store.channels()? {
+                println!(
+                    "CHANNEL {} name={} messages={}",
+                    channel.id,
+                    serde_json::to_string(&channel.name)?,
+                    channel.message_count
+                );
+            }
+            Ok(())
+        }
+    }
+}
+
+fn print_channel_invite(invite: &ChannelInvite) -> Result<()> {
+    print_channel_identity(invite)?;
+    println!("INVITE {invite}");
+    Ok(())
+}
+
+fn print_channel_identity(invite: &ChannelInvite) -> Result<()> {
+    println!("CHANNEL {}", invite.id());
+    println!("NAME {}", serde_json::to_string(invite.name())?);
+    Ok(())
+}
+
+async fn run_channel_session(
+    store: ChannelStore,
+    invite: ChannelInvite,
+    options: NodeOptions,
+) -> Result<()> {
+    let mut node = ChannelNode::start_with_options(store, invite.clone(), options).await?;
+    print_channel_identity(&invite)?;
+    println!("PEER {}", node.status().public_key);
+    if let Some(relay) = &node.status().relay {
+        println!("RELAY forced {relay}");
+    }
+    println!("TOPIC {} announced", hex::encode(invite.topic()));
+    println!("READY live-only");
+
+    let mut lines = BufReader::new(tokio::io::stdin()).lines();
+    let ctrl_c = tokio::signal::ctrl_c();
+    tokio::pin!(ctrl_c);
+    loop {
+        tokio::select! {
+            signal = &mut ctrl_c => {
+                signal.context("failed to install Ctrl-C handler")?;
+                break;
+            }
+            line = lines.next_line() => {
+                let Some(line) = line.context("failed to read channel input")? else {
+                    break;
+                };
+                match line.as_str() {
+                    "/quit" => break,
+                    "/typing on" => {
+                        if let Err(error) = node.send_typing(true) {
+                            eprintln!("WARNING {error}");
+                        }
+                    }
+                    "/typing off" => {
+                        if let Err(error) = node.send_typing(false) {
+                            eprintln!("WARNING {error}");
+                        }
+                    }
+                    _ if line.trim().is_empty() => {}
+                    _ => {
+                        if let Err(error) = node.send_text(line).await {
+                            eprintln!("WARNING {error}");
+                        }
+                    }
+                }
+            }
+            event = node.next_event() => {
+                let Some(event) = event else { break };
+                println!("EVENT {}", serde_json::to_string(&event)?);
+            }
+        }
+    }
+
+    println!("STOPPING");
+    node.shutdown()
+        .await
+        .context("failed to stop Peeroxide channel node")
+}
+
 async fn wait_and_shutdown(node: Node) -> Result<()> {
     tokio::signal::ctrl_c()
         .await
@@ -275,5 +424,16 @@ mod tests {
     fn rejects_malformed_force_relay() {
         assert!(parse_node_options(Some("not-a-relay")).is_err());
         assert!(parse_node_options(Some("00@127.0.0.1:49742")).is_err());
+    }
+
+    #[test]
+    fn parses_explicit_channel_invite_command() {
+        let cli = Cli::try_parse_from(["mp", "channel", "invite", &"01".repeat(32)]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Channel {
+                command: ChannelCommand::Invite { .. }
+            }
+        ));
     }
 }

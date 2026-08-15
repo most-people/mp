@@ -92,6 +92,9 @@ A publishes
 
 ## Phase 4: live channel messaging
 
+Status: accepted across the public-server to NAT-device path on 2026-08-15.
+See [the Phase 4 acceptance report](channel-acceptance.md).
+
 Deliverables:
 
 - Long-term Ed25519 identity.

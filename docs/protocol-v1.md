@@ -128,10 +128,79 @@ Initial stable codes:
 
 Errors from untrusted peers are connection-local and must not stop the node.
 
-## Reserved channel boundary
+## `mp-channel/1`
 
-The next implementation round will use `mp-channel/1` on the same Peeroxide
-identity and transport. Channel discovery topics are distinct from file CID
-topics. Each writer will own a signed append-only hash chain; live events and
-history synchronization will be separate message kinds. File attachments will
-contain a CID reference and use `mp-file/1` for bytes.
+Phase 4 channels reuse the persistent Peeroxide Ed25519 identity and encrypted
+SecretStream transport. Membership is capability-based: anyone holding the
+complete invite can discover and join the channel. There is no server-side
+membership list or revocation mechanism in this phase.
+
+### Capability invite and discovery
+
+The canonical invitation is:
+
+```text
+mp-channel://<channel-id>?key=<32-byte-lowercase-hex>&name=<display-name>
+```
+
+Given the random 32-byte capability `key`:
+
+```text
+channel-id = SHA-256("mp-channel/1 id\0" || key)
+topic      = SHA-256("mp-channel/1 topic\0" || key)
+```
+
+The receiver must recompute and match `channel-id`. The domain-separated topic
+is private to capability holders and cannot collide with a raw file CID topic.
+`name` is advisory, limited to 128 UTF-8 bytes, and does not affect identity.
+Unknown query parameters, duplicate fields, non-canonical hex, paths, ports,
+credentials, and fragments are rejected.
+
+`channels.json` stores joined capabilities and is written atomically with mode
+`0600` on Unix. The invite must be handled as a secret; disclosure grants
+channel access.
+
+### Signed writer chains
+
+Every persistent text entry contains these fields in this exact serialization
+order:
+
+```json
+{
+  "protocol": "mp-channel/1",
+  "channelId": "<channel-id>",
+  "writer": "<Ed25519-public-key-hex>",
+  "sequence": 1,
+  "previous": null,
+  "timestampMs": 1700000000123,
+  "text": "hello",
+  "signature": "<Ed25519-signature-hex>"
+}
+```
+
+The signature covers the UTF-8 bytes of
+`"mp-channel/1 message signature\0"` followed by the compact JSON object with
+the same fields except `signature`. The message id is
+`SHA-256("mp-channel/1 message id\0" || complete-signed-compact-JSON)`.
+
+Each writer has an independent chain. Sequence starts at one with `previous =
+null`; every later entry increments by exactly one and references that writer's
+last accepted message id. A receiver verifies protocol, channel id, limits,
+signature, authenticated transport writer, sequence, and previous id before an
+atomic state update. Exact duplicate message ids are ignored. Text is limited
+to 4096 UTF-8 bytes.
+
+### Live-only frames
+
+SecretStream preserves one JSON object per frame. Frames are limited to 16 KiB:
+
+```json
+{"type":"text","message":{"protocol":"mp-channel/1","channelId":"..."}}
+{"type":"typing","protocol":"mp-channel/1","channelId":"...","active":true}
+```
+
+Presence is derived from authenticated Peeroxide connection lifecycle. Typing
+and presence events are never written to `channels.json`. Phase 4 sends only
+live text and refuses a local text append when no peer is online. Reconnect
+history synchronization, new-member backfill, and CID attachments belong to
+Phase 5.

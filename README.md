@@ -3,7 +3,7 @@
 `mp` is an experimental, Rust-native P2P file distribution and channel
 messaging project built on Peeroxide.
 
-The first implementation milestone is intentionally narrow:
+The file-propagation milestone remains intentionally narrow:
 
 ```text
 CID
@@ -14,6 +14,10 @@ CID
   -> propagation continues after the publisher exits
 ```
 
+Phase 4 also implements live capability channels with signed per-writer hash
+chains, duplicate suppression, and ephemeral presence/typing. History backfill
+and attachments remain out of scope until Phase 5.
+
 Project documents:
 
 - [Roadmap](docs/roadmap.md)
@@ -21,6 +25,7 @@ Project documents:
 - [First-round acceptance](docs/acceptance.md)
 - [First-round implementation report](docs/first-round-report.md)
 - [Peeroxide isolation test](docs/peeroxide-repro.md)
+- [Phase 4 channel acceptance](docs/channel-acceptance.md)
 
 ## Development
 
@@ -34,10 +39,22 @@ cargo run --bin mp -- publish ./example.bin
 cargo run --bin mp -- get 'mp://<cid>?filename=example.bin' --discovery-timeout 90
 cargo run --bin mp -- node
 cargo run --bin mp -- holdings
+cargo run --bin mp -- channel create "team"
+cargo run --bin mp -- channel join 'mp-channel://...'
+cargo run --bin mp -- channel open '<channel-id>'
+cargo run --bin mp -- channel invite '<channel-id>'
+cargo run --bin mp -- channel list
 ```
 
 Use `--data-dir <path>` to isolate an identity and its verified objects. A
 successful `publish` or `get` remains online and seeds until interrupted.
+
+`channel create` persists and prints a capability invite; `channel invite`
+explicitly reveals it again. `channel join` and `channel open` enter a live
+session without writing the capability to routine logs: plain input sends text,
+`/typing on` and `/typing off` emit transient state, and `/quit` exits. Phase 4
+is deliberately live-only; history synchronization and attachments are the
+next phase.
 
 Peeroxide blind-relay mode is available for diagnostics:
 

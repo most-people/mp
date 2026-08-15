@@ -1,5 +1,8 @@
 //! Core protocol, storage, and networking primitives for mp.
 
+mod channel;
+mod channel_node;
+mod channel_store;
 mod content_id;
 mod error;
 mod identity;
@@ -9,6 +12,12 @@ mod protocol;
 mod storage;
 mod transfer;
 
+pub use channel::{
+    CHANNEL_PROTOCOL, ChannelEvent, ChannelInvite, MAX_CHANNEL_FRAME_SIZE, MAX_CHANNEL_NAME_SIZE,
+    MAX_CHANNEL_TEXT_SIZE, SignedChannelMessage,
+};
+pub use channel_node::{ChannelNode, ChannelStatus};
+pub use channel_store::{ChannelStore, ChannelSummary};
 pub use content_id::{
     MAX_FILE_SIZE, RAW_CODEC, SHA2_256_CODE, calculate_bytes_cid, calculate_file_cid,
     cid_from_sha256, parse_file_cid, topic_from_cid,

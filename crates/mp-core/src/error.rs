@@ -24,6 +24,14 @@ pub enum MpError {
     #[error("invalid share link: {0}")]
     InvalidLink(String),
 
+    /// A channel capability invite is malformed or inconsistent.
+    #[error("invalid channel invite: {0}")]
+    InvalidChannelInvite(String),
+
+    /// A channel message, writer chain, or live event is invalid.
+    #[error("channel error: {0}")]
+    Channel(String),
+
     /// A wire frame violates the mp-file/1 protocol.
     #[error("protocol error: {0}")]
     Protocol(String),
