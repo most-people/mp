@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>mp channels</title>
+    <link rel="stylesheet" href="/app.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <header class="brand-bar">
+          <div class="brand-mark" aria-hidden="true">mp</div>
+          <div class="brand-copy">
+            <strong>mp</strong>
+            <span>channels</span>
+          </div>
+          <span class="socket-state" id="socket-state" title="事件连接状态"></span>
+        </header>
+
+        <div class="sidebar-actions">
+          <button class="button button-primary" id="create-channel" type="button">新建</button>
+          <button class="button button-secondary" id="join-channel" type="button">加入</button>
+        </div>
+
+        <nav class="channel-list" id="channel-list" aria-label="本地频道"></nav>
+
+        <footer class="sidebar-footer">
+          <span>mp-channel/1</span>
+          <span id="channel-total">0 channels</span>
+        </footer>
+      </aside>
+
+      <main class="workspace">
+        <header class="channel-header">
+          <div class="channel-heading">
+            <h1 id="active-name">选择频道</h1>
+            <span class="channel-id" id="active-id">未连接</span>
+          </div>
+          <div class="channel-tools">
+            <div class="presence" id="presence">
+              <span class="presence-dot"></span>
+              <span id="peer-count">0 peers</span>
+            </div>
+            <button class="button button-secondary" id="copy-invite" type="button" disabled>
+              复制邀请
+            </button>
+          </div>
+        </header>
+
+        <section class="messages" id="messages" aria-live="polite">
+          <div class="empty-state" id="empty-state">
+            <div class="empty-mark" aria-hidden="true">#</div>
+            <strong>没有打开的频道</strong>
+          </div>
+        </section>
+
+        <div class="typing-line" id="typing-line" aria-live="polite"></div>
+
+        <form class="composer" id="composer">
+          <textarea
+            id="message-input"
+            rows="1"
+            maxlength="4096"
+            placeholder="消息"
+            aria-label="消息"
+            disabled
+          ></textarea>
+          <button class="send-button" id="send-message" type="submit" disabled>发送</button>
+        </form>
+      </main>
+    </div>
+
+    <dialog class="dialog" id="create-dialog">
+      <form id="create-form">
+        <header class="dialog-header">
+          <h2>新建频道</h2>
+          <button class="close-button" type="button" data-close="create-dialog" title="关闭" aria-label="关闭">×</button>
+        </header>
+        <label class="field">
+          <span>频道名称</span>
+          <input class="input" id="channel-name" name="name" maxlength="128" autocomplete="off" required />
+        </label>
+        <footer class="dialog-actions">
+          <button class="button button-secondary" type="button" data-close="create-dialog">取消</button>
+          <button class="button button-primary" id="create-submit" type="submit">创建</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog class="dialog dialog-wide" id="join-dialog">
+      <form id="join-form">
+        <header class="dialog-header">
+          <h2>加入频道</h2>
+          <button class="close-button" type="button" data-close="join-dialog" title="关闭" aria-label="关闭">×</button>
+        </header>
+        <label class="field">
+          <span>频道邀请</span>
+          <textarea class="input invite-input" id="channel-invite" name="invite" rows="4" placeholder="mp-channel://" required></textarea>
+        </label>
+        <footer class="dialog-actions">
+          <button class="button button-secondary" type="button" data-close="join-dialog">取消</button>
+          <button class="button button-primary" id="join-submit" type="submit">加入</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <dialog class="dialog dialog-wide" id="invite-dialog">
+      <header class="dialog-header">
+        <h2>频道邀请</h2>
+        <button class="close-button" type="button" data-close="invite-dialog" title="关闭" aria-label="关闭">×</button>
+      </header>
+      <label class="field">
+        <span>mp-channel/1</span>
+        <textarea class="input invite-output" id="invite-output" rows="4" readonly></textarea>
+      </label>
+      <footer class="dialog-actions">
+        <button class="button button-secondary" type="button" data-close="invite-dialog">关闭</button>
+        <button class="button button-primary" id="copy-invite-dialog" type="button">复制</button>
+      </footer>
+    </dialog>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="/app.js" defer></script>
+  </body>
+</html>

@@ -12,6 +12,8 @@ use mp_core::{
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tracing_subscriber::EnvFilter;
 
+mod web;
+
 #[derive(Debug, Parser)]
 #[command(
     name = "mp",
@@ -66,6 +68,13 @@ enum Command {
     Channel {
         #[command(subcommand)]
         command: ChannelCommand,
+    },
+
+    /// Start the local browser UI and JSON/WebSocket service.
+    Web {
+        /// HTTP listen address. Non-loopback addresses expose an unauthenticated API.
+        #[arg(long, default_value = "127.0.0.1:1976")]
+        listen: SocketAddr,
     },
 }
 
@@ -125,6 +134,7 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Holdings => list_holdings(&data_dir),
         Command::Doctor { timeout } => doctor(&data_dir, timeout, node_options).await,
         Command::Channel { command } => channel(&data_dir, command, node_options).await,
+        Command::Web { listen } => web::serve(&data_dir, node_options, listen).await,
     }
 }
 

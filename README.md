@@ -44,6 +44,7 @@ cargo run --bin mp -- channel join 'mp-channel://...'
 cargo run --bin mp -- channel open '<channel-id>'
 cargo run --bin mp -- channel invite '<channel-id>'
 cargo run --bin mp -- channel list
+cargo run --bin mp -- web
 ```
 
 Use `--data-dir <path>` to isolate an identity and its verified objects. A
@@ -55,6 +56,11 @@ session without writing the capability to routine logs: plain input sends text,
 `/typing on` and `/typing off` emit transient state, and `/quit` exits. Phase 4
 is deliberately live-only; history synchronization and attachments are the
 next phase.
+
+`mp web` starts the embedded browser interface and JSON/WebSocket service at
+`http://127.0.0.1:1976`. It uses the same data directory, identity, channel
+store, and live-only protocol as the CLI. See [Web service testing](docs/web-service.md)
+for the HTTP surface and remote-access boundary.
 
 Peeroxide blind-relay mode is available for diagnostics:
 
